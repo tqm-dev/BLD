@@ -55,4 +55,8 @@ dkms.conf
 *.dwo
 
 # ccan config header
-./config.h
+config.h
+
+# executable
+beaconlited
+
