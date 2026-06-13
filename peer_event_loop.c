@@ -33,7 +33,7 @@ static struct io_plan *init_conn(struct io_conn *conn, void *ctx_arg) {
 	return io_read_partial(conn, ctx->buffer, BUFFER_SIZE, &ctx->len_read, read_done, ctx);
 }
 
-static struct io_listener * peer_recv_event_loop_main(void *arg) {
+static struct io_listener * io_listen_peer(void *arg) {
 	(void)arg;
 
 	int server_fd;
@@ -103,7 +103,7 @@ static struct io_plan *init_outbound_conn(struct io_conn *conn, void *ctx_arg) {
 	return io_write(conn, ctx->buffer, msg_len, close_connection, ctx);
 }
 
-static struct io_conn * peer_send_event_loop_main(struct node_request *req) {
+static struct io_conn * io_connect_peer(struct node_request *req) {
 
 	const char *ip_address = req->ip_address;
 	uint16_t port = req->port;
@@ -171,7 +171,7 @@ static struct io_plan *process_request_from_local(struct io_conn *conn, struct r
 	while (req) {
 		switch (req->type) {
 			case REQ_CONNECT:
-				peer_send_event_loop_main(req);
+				io_connect_peer(req);
 				break;
 			default:
 				io_break(NULL);
@@ -197,7 +197,7 @@ static struct io_plan *init_eventfd_conn(struct io_conn *conn, struct request_qu
 	return io_read(conn, &ctx->ev_counter, sizeof(ctx->ev_counter), process_request_from_local, ctx);
 }
 
-static struct io_conn * local_recv_event_loop_main(void *arg) {
+static struct io_conn * io_connect_eventfd(void *arg) {
 
 	struct request_queue_ctx* q_ctx = (struct request_queue_ctx*)arg;
 
@@ -208,12 +208,12 @@ static struct io_conn * local_recv_event_loop_main(void *arg) {
 void* peer_io_loop(void *arg) {
 
 	// Listening connection from peer
-	struct io_listener * listener = peer_recv_event_loop_main(arg);
+	struct io_listener * listener = io_listen_peer(arg);
 	if (listener == NULL)
 		return NULL;
 
 	// Listening request from local
-	struct io_conn *ev_conn = local_recv_event_loop_main(arg);
+	struct io_conn *ev_conn = io_connect_eventfd(arg);
 	if (ev_conn == NULL) {
 		io_close_listener(listener);
 		return NULL;
