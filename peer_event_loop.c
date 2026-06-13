@@ -81,6 +81,11 @@ static struct io_listener * io_listen_peer(void *arg) {
 	return listener;
 }
 
+static struct io_plan *idle_connection(struct io_conn *conn, void *b)
+{
+	return io_wait(conn, b, idle_connection, NULL);
+}
+
 static struct io_plan *close_connection(struct io_conn *conn, struct peer_context *ctx) {
 
 	printf("[Client LOG] Data successfully written to the peer.\n");
@@ -100,7 +105,7 @@ static struct io_plan *init_outbound_conn(struct io_conn *conn, void *ctx_arg) {
 	size_t msg_len = strlen(ctx->buffer);
 
 	/* Register the next plan */
-	return io_write(conn, ctx->buffer, msg_len, close_connection, ctx);
+	return io_write(conn, ctx->buffer, msg_len, idle_connection, ctx);
 }
 
 static struct io_conn * io_connect_peer(struct node_request *req) {
