@@ -5,7 +5,8 @@
 
 /* Context structure allocated per connected peer */
 struct peer_context {
-	char buffer[BUFFER_SIZE];
+	char read_buffer[BUFFER_SIZE];
+	char write_buffer[BUFFER_SIZE];
 	size_t len_read;
 };
 
