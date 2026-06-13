@@ -10,27 +10,26 @@
 #include <string.h>
 #include "peer.h"
 #include "peer_event_handler.h"
+#include "peer_event_loop.h"
 #include <pthread.h>
 
 static struct io_plan *read_done(struct io_conn *conn, struct peer_context *ctx) {
 
 	handle_message_from_peer(ctx);
 
-	/* Register the next read plan to continue the async read loop */
+	/* Register the next plan */
 	return io_read_partial(conn, ctx->buffer, BUFFER_SIZE, &ctx->len_read, read_done, ctx);
 }
 
 static struct io_plan *init_conn(struct io_conn *conn, void *ctx_arg) {
 	(void)ctx_arg;
 
-	/* Allocate memory context for this specific peer using ccan/tal.
-	 * Binding it to 'conn' ensures it auto-frees when the peer disconnects. */
 	struct peer_context *ctx = tal(conn, struct peer_context);
 	memset(ctx, 0, sizeof(*ctx));
 
 	handle_connected_from_peer(ctx);
 
-	/* Set up the initial async read plan */
+	/* Register the next plan */
 	return io_read_partial(conn, ctx->buffer, BUFFER_SIZE, &ctx->len_read, read_done, ctx);
 }
 
@@ -54,7 +53,6 @@ static struct io_listener * peer_recv_event_loop_main(void *arg) {
 		return NULL;
 	}
 
-	/* Set up address flags for standard port 9735 */
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = INADDR_ANY;
 	addr.sin_port = htons(9735);
@@ -71,7 +69,6 @@ static struct io_listener * peer_recv_event_loop_main(void *arg) {
 		return NULL;
 	}
 
-	/* Pass ownership of the server_fd to ccan/io */
 	listener = io_new_listener(NULL, server_fd, init_conn, NULL);
 	if (!listener) {
 		fprintf(stderr, "Failed to create ccan/io listener\n");
@@ -82,12 +79,13 @@ static struct io_listener * peer_recv_event_loop_main(void *arg) {
 	printf("[Server LOG] Listening on port 9735...\n");
 
 	return listener;
-
 }
 
-static struct io_plan *client_write_done(struct io_conn *conn, struct peer_context *ctx) {
+static struct io_plan *close_connection(struct io_conn *conn, struct peer_context *ctx) {
 
 	printf("[Client LOG] Data successfully written to the peer.\n");
+
+	/* Register the next plan */
 	return io_close(conn);
 }
 
@@ -101,20 +99,20 @@ static struct io_plan *init_outbound_conn(struct io_conn *conn, void *ctx_arg) {
 	strcpy(ctx->buffer, "Hello from BLD outbound client!");
 	size_t msg_len = strlen(ctx->buffer);
 
-	return io_write(conn, ctx->buffer, msg_len, client_write_done, ctx);
+	/* Register the next plan */
+	return io_write(conn, ctx->buffer, msg_len, close_connection, ctx);
 }
 
-static struct io_conn * peer_send_event_loop_main(void* arg) {
+static struct io_conn * peer_send_event_loop_main(struct node_request *req) {
 
-	const char *ip_address = "127.0.0.1";
-	uint16_t port = 9735;
+	const char *ip_address = req->ip_address;
+	uint16_t port = req->port;
 
 	int client_fd;
 	struct sockaddr_in remote_addr;
 
 	printf("[Client LOG] Processing request: Connect to %s:%d\n", ip_address, port);
 
-	/* Create standard TCP Socket */
 	client_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (client_fd < 0) {
 		perror("[Client ERROR] Failed to create socket");
@@ -127,7 +125,6 @@ static struct io_conn * peer_send_event_loop_main(void* arg) {
 		fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
 	}
 
-	/* Set up remote address structure */
 	remote_addr.sin_family = AF_INET;
 	remote_addr.sin_port = htons(port);
 	if (inet_pton(AF_INET, ip_address, &remote_addr.sin_addr) <= 0) {
@@ -161,21 +158,72 @@ static struct io_conn * peer_send_event_loop_main(void* arg) {
 	return conn;
 }
 
+static struct io_plan *process_request_from_local(struct io_conn *conn, struct request_queue_ctx *ctx) {
+
+	pthread_mutex_lock(&ctx->mutex);
+
+	struct node_request *req = ctx->head;
+	ctx->head = NULL;
+	ctx->tail = NULL;
+
+	pthread_mutex_unlock(&ctx->mutex);
+
+	while (req) {
+		switch (req->type) {
+			case REQ_CONNECT:
+				peer_send_event_loop_main(req);
+				break;
+			default:
+				io_break(NULL);
+				break;
+		}
+
+		struct node_request *next = req->next;
+		free(req);
+		req = next;
+	}
+
+	printf("[Local  LOG] done process_shared_queue.\n");
+
+	/* Register the next plan */
+	return io_read(conn, &ctx->ev_counter, sizeof(ctx->ev_counter), process_request_from_local, ctx);
+}
+
+static struct io_plan *init_eventfd_conn(struct io_conn *conn, struct request_queue_ctx *ctx) {
+
+	printf("[Local  LOG] eventfd monitoring started.\n");
+
+	/* Register the next plan */
+	return io_read(conn, &ctx->ev_counter, sizeof(ctx->ev_counter), process_request_from_local, ctx);
+}
+
+static struct io_conn * local_recv_event_loop_main(void *arg) {
+
+	struct request_queue_ctx* q_ctx = (struct request_queue_ctx*)arg;
+
+	/* Register the next plan */
+	return io_new_conn(NULL, q_ctx->ev_fd, init_eventfd_conn, q_ctx);
+}
+
 void* peer_io_loop(void *arg) {
 
+	// Listening connection from peer
 	struct io_listener * listener = peer_recv_event_loop_main(arg);
 	if (listener == NULL)
 		return NULL;
 
-	struct io_conn * conn = peer_send_event_loop_main(arg);
-	if (conn == NULL)
+	// Listening request from local
+	struct io_conn *ev_conn = local_recv_event_loop_main(arg);
+	if (ev_conn == NULL) {
+		io_close_listener(listener);
 		return NULL;
+	}
 
 	/* Start the non-blocking event multiplexer loop */
 	io_loop(NULL, NULL);
 
 	io_close_listener(listener);
-	io_close(conn);
+	io_close(ev_conn);
 
 	return NULL;
 }
