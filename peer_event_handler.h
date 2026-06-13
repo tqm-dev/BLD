@@ -4,12 +4,8 @@
 
 #include "peer.h"
 
-struct conn_handlers {
-	int (*on_init_conn)(struct peer_context* ctx);
-	int (*on_read_done)(struct peer_context* ctx);
-};
-
-struct conn_handlers* get_handlers(void);
+int handle_connected_from_peer(struct peer_context* ctx);
+int handle_message_from_peer(struct peer_context* ctx);
 
 
 #endif //PEER_EVENT_HANDLER_H
