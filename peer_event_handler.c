@@ -9,7 +9,7 @@
 int handle_connected_from_peer(struct peer_context* ctx) {
 	(void)ctx;
 
-	printf("New peer connected successfully!\n");
+	printf("[Server LOG] New peer connected successfully!\n");
 
 	return 0;
 }
