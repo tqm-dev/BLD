@@ -11,7 +11,7 @@ LDFLAGS  := -pthread
 TARGET   := beaconlited
 
 # 1. Main application source files
-SRCS     := main.c
+SRCS     := main.c peer_event_handler.c
 
 # 2. Collect CCAN source files
 CCAN_DIR  := ccan/ccan
